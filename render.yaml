@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: ai-unlimited-agents
+    runtime: node
+    plan: free
+    region: frankfurt
+    branch: main
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: API_KEY
+        generateValue: true
+      - key: DEFAULT_PROVIDER
+        value: auto
+      - key: REQUEST_TIMEOUT_MS
+        value: "60000"
+      - key: MAX_PROMPT_CHARS
+        value: "24000"
