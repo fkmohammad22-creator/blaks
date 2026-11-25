@@ -8,23 +8,24 @@ const prompts: Record<AgentRole, string> = {
   coding: "You are a senior software engineer. Produce correct, secure, maintainable code and explain important tradeoffs.",
   analysis: "You are a rigorous analyst. Structure the problem, state assumptions, compare options, and give a reasoned conclusion.",
   writing: "You are an expert writer. Match the requested language, audience, tone, and format.",
-  review: "You are an independent reviewer. Identify factual gaps, unsafe assumptions, bugs, and improvements. Do not invent verification."
+  review: "You are an independent quality reviewer. Check the proposed answer for errors, missing caveats, unsafe assumptions, and clarity. Return a corrected final answer, not just a list of criticisms."
 };
 
 export class ProviderError extends Error {}
 
-function chooseProvider(requested?: string): ProviderConfig {
+function chooseProvider(requested?: string, exclude?: string): ProviderConfig {
   if (!config.providers.length) throw new ProviderError("No provider is configured. Add at least one provider API key.");
   if (requested && requested !== "auto") {
     const match = config.providers.find(p => p.name.toLowerCase() === requested.toLowerCase());
     if (!match) throw new ProviderError(`Provider '${requested}' is not configured.`);
     return match;
   }
+  const available = config.providers.filter(p => p.name !== exclude);
   if (config.defaultProvider !== "auto") {
-    const match = config.providers.find(p => p.name.toLowerCase() === config.defaultProvider.toLowerCase());
+    const match = available.find(p => p.name.toLowerCase() === config.defaultProvider.toLowerCase());
     if (match) return match;
   }
-  return config.providers[0];
+  return available[0] || config.providers[0];
 }
 
 async function complete(provider: ProviderConfig, messages: Array<{role: string; content: string}>): Promise<{content: string; model: string}> {
@@ -54,8 +55,8 @@ export function listAgents() {
   return Object.entries(prompts).map(([id, description]) => ({ id, description }));
 }
 
-export async function runAgent(input: ChatInput) {
-  const provider = chooseProvider(input.provider);
+export async function runAgent(input: ChatInput, excludeProvider?: string) {
+  const provider = chooseProvider(input.provider, excludeProvider);
   const role = input.role || "analysis";
   const system = input.system?.trim() || prompts[role];
   const result = await complete(provider, [
@@ -66,15 +67,21 @@ export async function runAgent(input: ChatInput) {
 }
 
 export async function runOrchestrator(input: ChatInput) {
-  const primary = await runAgent({ ...input, role: input.role || "analysis" });
+  const specialist = await runAgent({ ...input, role: input.role || "analysis" });
+  const reviewer = await runAgent({
+    message: `User request:\n${input.message}\n\nDraft response from ${specialist.agent}:\n${specialist.content}\n\nReview it for correctness, completeness, safety, and clarity. Return the improved final answer while preserving useful details.`,
+    role: "review"
+  }, specialist.provider);
   return {
-    answer: primary.content,
+    answer: reviewer.content,
     orchestration: {
-      mode: "single-specialist",
-      agent: primary.agent,
-      provider: primary.provider,
-      model: primary.model,
-      note: "Multi-agent delegation is the next implementation milestone; this initial release establishes the provider and agent runtime."
+      mode: "specialist-plus-review",
+      agents: [
+        { role: specialist.agent, provider: specialist.provider, model: specialist.model },
+        { role: reviewer.agent, provider: reviewer.provider, model: reviewer.model }
+      ],
+      provider_diversity: specialist.provider !== reviewer.provider,
+      note: "The task is drafted by a specialist and independently reviewed. Provider diversity depends on the number of configured providers."
     }
   };
 }
